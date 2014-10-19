@@ -43,10 +43,20 @@ type follower struct {
 }
 
 // Follow returns an io.ReadCloser that follows the writes to a file.
-func Follow(filename string) (io.ReadCloser, error) {
+func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 	file, err := os.OpenFile(filename, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
+	}
+
+	var offset int64
+	if !fromStart {
+		n, err := file.Seek(0, os.SEEK_END)
+		if err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		offset = n
 	}
 
 	fi, err := os.Stat(file.Name())
@@ -65,7 +75,7 @@ func Follow(filename string) (io.ReadCloser, error) {
 
 	f := &follower{
 		filename: filename,
-		offset:   0,
+		offset:   offset,
 		maxSize:  fi.Size(),
 		notifyc:  make(chan struct{}),
 		errc:     make(chan error),

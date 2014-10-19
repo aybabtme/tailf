@@ -23,7 +23,7 @@ func canFollowFile(t *testing.T, filename string, file *os.File) error {
 
 	want := strings.Join(toWrite, "")
 
-	follow, err := tailf.Follow(filename)
+	follow, err := tailf.Follow(filename, true)
 	if err != nil {
 		return fmt.Errorf("creating follower: %v", err)
 	}

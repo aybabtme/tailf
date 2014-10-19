@@ -22,7 +22,7 @@ func main() {
 		close(done)
 	}()
 
-	follow, err := tailf.Follow(tempFile.Name())
+	follow, err := tailf.Follow(tempFile.Name(), true)
 	if err != nil {
 		log.Fatalf("couldn't follow %q: %v", tempFile.Name(), err)
 	}
