@@ -17,6 +17,9 @@ return `io.EOF`.
 
 See `example/example.go`:
 
+![tailf](https://cloud.githubusercontent.com/assets/1189716/4695009/026985fa-57e0-11e4-9aae-221dbc533c29.gif)
+
+
 ```go
 func main() {
 
@@ -49,4 +52,3 @@ func main() {
 }
 ```
 
-![tailf](https://cloud.githubusercontent.com/assets/1189716/4695009/026985fa-57e0-11e4-9aae-221dbc533c29.gif)
