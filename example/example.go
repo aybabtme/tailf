@@ -51,10 +51,10 @@ func makeTempFile() *os.File {
 func writeSlowlyToFile(f *os.File) {
 	rand.Seed(time.Now().UnixNano())
 	log.SetOutput(f)
-	timer := time.NewTimer(time.Second * 5)
+	timer := time.NewTimer(time.Second * 60)
 
-	min := time.Millisecond * 100
-	max := time.Millisecond * 500
+	min := time.Millisecond * 10
+	max := time.Millisecond * 20
 
 	for i := 0; ; i++ {
 		sleepFor := randomDuration(min, max)

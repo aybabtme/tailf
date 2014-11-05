@@ -136,7 +136,7 @@ func (f *follower) Read(b []byte) (int, error) {
 		return 0, nil
 	}
 
-	n, err := f.file.Read(b[:readable])
+	n, err := f.file.Read(b[:imin(readable, int64(len(b)))])
 	f.offset += int64(n)
 	f.mu.Unlock()
 
@@ -192,6 +192,9 @@ func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 		return f.reopenFile()
 	case fsnotify.Write:
 		return f.updateFile()
+	case fsnotify.Chmod:
+		// drop it
+		return nil
 	default:
 		panic(fmt.Sprintf("unknown event: %#v", ev))
 	}
@@ -230,4 +233,11 @@ func (f *follower) updateFile() error {
 	}
 	f.maxSize = fi.Size()
 	return nil
+}
+
+func imin(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
