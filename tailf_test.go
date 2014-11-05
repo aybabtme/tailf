@@ -141,8 +141,8 @@ func withTempFile(t *testing.T, action func(t *testing.T, filename string, file 
 	if err != nil {
 		t.Fatalf("couldn't create temp file: %v", err)
 	}
-	defer file.Close()
 	defer os.Remove(file.Name())
+	defer file.Close()
 
 	err = action(t, file.Name(), file)
 	if err != nil {

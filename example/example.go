@@ -13,8 +13,8 @@ import (
 func main() {
 
 	tempFile := makeTempFile()
-	defer tempFile.Close()
 	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
 
 	done := make(chan struct{})
 	go func() {
