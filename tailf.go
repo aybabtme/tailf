@@ -15,6 +15,7 @@ package tailf
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -35,12 +36,14 @@ type (
 type follower struct {
 	filename string
 
-	mu      sync.Mutex
-	notifyc chan struct{}
-	errc    chan error
-	file    *os.File
-	reader  *bufio.Reader
-	watch   *fsnotify.Watcher
+	mu             sync.Mutex
+	notifyc        chan struct{}
+	errc           chan error
+	file           *os.File
+	fileReader     *bufio.Reader
+	rotationBuffer *bytes.Buffer
+	reader         io.Reader
+	watch          *fsnotify.Watcher
 }
 
 // Follow returns an io.ReadCloser that follows the writes to a file.
@@ -70,12 +73,13 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 	}
 
 	f := &follower{
-		filename: filename,
-		notifyc:  make(chan struct{}),
-		errc:     make(chan error),
-		file:     file,
-		reader:   reader,
-		watch:    watch,
+		filename:   filename,
+		notifyc:    make(chan struct{}),
+		errc:       make(chan error),
+		file:       file,
+		fileReader: reader,
+		reader:     reader,
+		watch:      watch,
 	}
 
 	go f.followFile()
@@ -105,11 +109,11 @@ func (f *follower) Read(b []byte) (int, error) {
 	f.mu.Lock()
 
 	// Refill the buffer
-	_, err := f.reader.Peek(1)
+	_, err := f.fileReader.Peek(1)
 	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
 		return 0, err
 	}
-	readable := f.reader.Buffered()
+	readable := f.fileReader.Buffered()
 
 	// check for errors before doing anything
 	select {
@@ -220,7 +224,14 @@ func (f *follower) reopenFile() error {
 		return err
 	}
 
-	f.reader = bufio.NewReader(f.file)
+	buf := bytes.NewBuffer(make([]byte, 0, f.fileReader.Buffered()))
+	if n, err := io.Copy(buf, f.fileReader); err != nil && n != int64(f.fileReader.Buffered()) {
+		return err
+	}
+
+	f.fileReader = bufio.NewReader(f.file)
+
+	f.reader = io.MultiReader(buf, f.fileReader)
 
 	return err
 }
@@ -229,7 +240,7 @@ func (f *follower) updateFile() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	_, err := f.reader.Peek(1) // Refill the buffer
+	_, err := f.fileReader.Peek(1) // Refill the buffer
 	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
 		return err
 	}
