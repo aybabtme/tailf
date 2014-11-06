@@ -103,7 +103,12 @@ func (f *follower) Close() error {
 
 func (f *follower) Read(b []byte) (int, error) {
 	f.mu.Lock()
-	_, _ = f.reader.Peek(1) // Force a buffer fill if need be, success or failure doesn't mater
+
+	// Refill the buffer
+	_, err := f.reader.Peek(1)
+	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
+		return 0, err
+	}
 	readable := f.reader.Buffered()
 
 	// check for errors before doing anything
@@ -224,7 +229,10 @@ func (f *follower) updateFile() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.reader.Peek(1) // Refill the buffer
+	_, err := f.reader.Peek(1) // Refill the buffer
+	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
+		return err
+	}
 
 	return nil
 }
