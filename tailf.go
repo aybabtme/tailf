@@ -99,6 +99,7 @@ func (f *follower) Close() error {
 
 func (f *follower) Read(b []byte) (int, error) {
 	f.mu.Lock()
+	f.reader.Peek(1)
 	readable := f.reader.Buffered()
 
 	// check for errors before doing anything
