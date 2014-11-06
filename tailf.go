@@ -183,19 +183,15 @@ func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 		return ErrFileTruncated{
 			fmt.Errorf("new file created with this name: %v", ev.String()),
 		}
-	}
-	if ev.Op&fsnotify.Remove == fsnotify.Remove {
+	} else if ev.Op&fsnotify.Remove == fsnotify.Remove {
 		return ErrFileRemoved{
 			fmt.Errorf("file was removed: %v", ev.String()),
 		}
-	}
-	if ev.Op&fsnotify.Rename == fsnotify.Rename {
+	} else if ev.Op&fsnotify.Rename == fsnotify.Rename {
 		return f.reopenFile()
-	}
-	if ev.Op&fsnotify.Write == fsnotify.Write {
+	} else if ev.Op&fsnotify.Write == fsnotify.Write {
 		return f.updateFile()
-	}
-	if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
+	} else if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
 		// drop it
 		return nil
 	}
