@@ -132,7 +132,7 @@ func (f *follower) Read(b []byte) (int, error) {
 		return 0, nil
 	}
 
-	n, err := f.reader.Read(b[:imin(int64(readable), int64(len(b)))])
+	n, err := f.reader.Read(b[:imin(readable, len(b))])
 	f.mu.Unlock()
 
 	return n, err
@@ -229,7 +229,7 @@ func (f *follower) updateFile() error {
 	return nil
 }
 
-func imin(a, b int64) int64 {
+func imin(a, b int) int {
 	if a < b {
 		return a
 	}
