@@ -91,8 +91,14 @@ func (f *follower) Close() error {
 	defer f.mu.Unlock()
 	f.isClosed = true
 	werr := f.watch.Close()
-	if werr != nil {
-		return fmt.Errorf("couldn't remove watch (%v)", werr)
+	cerr := f.file.Close()
+	switch {
+	case werr != nil && cerr == nil:
+		return werr
+	case werr == nil && cerr != nil:
+		return cerr
+	case werr != nil && cerr != nil:
+		return fmt.Errorf("couldn't remove watch (%v) and close file (%v)", werr, cerr)
 	}
 	return nil
 }
