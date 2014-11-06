@@ -179,25 +179,24 @@ func (f *follower) followFile() {
 }
 
 func (f *follower) handleFileEvent(ev fsnotify.Event) error {
-	switch ev.Op {
-	case fsnotify.Create:
+	if ev.Op&fsnotify.Create == fsnotify.Create {
 		return ErrFileTruncated{
 			fmt.Errorf("new file created with this name: %v", ev.String()),
 		}
-	case fsnotify.Remove:
+	} else if ev.Op&fsnotify.Remove == fsnotify.Remove {
 		return ErrFileRemoved{
 			fmt.Errorf("file was removed: %v", ev.String()),
 		}
-	case fsnotify.Rename:
+	} else if ev.Op&fsnotify.Rename == fsnotify.Rename {
 		return f.reopenFile()
-	case fsnotify.Write:
+	} else if ev.Op&fsnotify.Write == fsnotify.Write {
 		return f.updateFile()
-	case fsnotify.Chmod:
+	} else if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
 		// drop it
 		return nil
-	default:
-		panic(fmt.Sprintf("unknown event: %#v", ev))
 	}
+
+	panic(fmt.Sprintf("unknown event: %#v", ev))
 }
 
 func (f *follower) reopenFile() error {
