@@ -14,11 +14,13 @@ return EOF.
 package tailf
 
 import (
+	"bufio"
 	"fmt"
-	"gopkg.in/fsnotify.v1"
 	"io"
 	"os"
 	"sync"
+
+	"gopkg.in/fsnotify.v1"
 )
 
 type (
@@ -32,14 +34,14 @@ type (
 
 type follower struct {
 	filename string
-	offset   int64
-	maxSize  int64
 
-	mu      sync.Mutex
-	notifyc chan struct{}
-	errc    chan error
-	file    *os.File
-	watch   *fsnotify.Watcher
+	mu       sync.Mutex
+	notifyc  chan struct{}
+	errc     chan error
+	file     *os.File
+	reader   *bufio.Reader
+	watch    *fsnotify.Watcher
+	isClosed bool
 }
 
 // Follow returns an io.ReadCloser that follows the writes to a file.
@@ -49,20 +51,15 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	var offset int64
 	if !fromStart {
-		n, err := file.Seek(0, os.SEEK_END)
+		_, err := file.Seek(0, os.SEEK_END)
 		if err != nil {
 			_ = file.Close()
 			return nil, err
 		}
-		offset = n
 	}
 
-	fi, err := os.Stat(file.Name())
-	if err != nil {
-		return nil, err
-	}
+	reader := bufio.NewReader(file)
 
 	watch, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -75,11 +72,10 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 
 	f := &follower{
 		filename: filename,
-		offset:   offset,
-		maxSize:  fi.Size(),
 		notifyc:  make(chan struct{}),
 		errc:     make(chan error),
 		file:     file,
+		reader:   reader,
 		watch:    watch,
 	}
 
@@ -93,22 +89,17 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 func (f *follower) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.isClosed = true
 	werr := f.watch.Close()
-	cerr := f.file.Close()
-	switch {
-	case werr != nil && cerr == nil:
-		return werr
-	case werr == nil && cerr != nil:
-		return cerr
-	case werr != nil && cerr != nil:
-		return fmt.Errorf("couldn't remove watch (%v) and close file (%v)", werr, cerr)
+	if werr != nil {
+		return fmt.Errorf("couldn't remove watch (%v)", werr)
 	}
 	return nil
 }
 
 func (f *follower) Read(b []byte) (int, error) {
 	f.mu.Lock()
-	readable := f.maxSize - f.offset
+	readable := f.reader.Buffered()
 
 	// check for errors before doing anything
 	select {
@@ -136,9 +127,14 @@ func (f *follower) Read(b []byte) (int, error) {
 		return 0, nil
 	}
 
-	n, err := f.file.Read(b[:imin(readable, int64(len(b)))])
-	f.offset += int64(n)
+	fmt.Println(readable, "|", int64(len(b)))
+
+	n, err := f.reader.Read(b[:imin(int64(readable), int64(len(b)))])
 	f.mu.Unlock()
+
+	if !f.isClosed && err == io.EOF {
+		return n, nil
+	}
 
 	return n, err
 }
@@ -203,7 +199,7 @@ func (f *follower) reopenFile() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	fi, err := os.Stat(f.filename)
+	_, err := os.Stat(f.filename)
 	if os.IsNotExist(err) {
 		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
 	}
@@ -211,14 +207,14 @@ func (f *follower) reopenFile() error {
 		return err
 	}
 
-	_ = f.file.Close()
-	f.maxSize = fi.Size()
+	f.file.Close()
 	f.file, err = os.OpenFile(f.filename, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
 
-	_, err = f.file.Seek(f.offset, os.SEEK_SET)
+	f.reader = bufio.NewReader(f.file)
+
 	return err
 }
 
@@ -226,11 +222,8 @@ func (f *follower) updateFile() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	fi, err := os.Stat(f.filename)
-	if err != nil {
-		return err
-	}
-	f.maxSize = fi.Size()
+	f.reader.Peek(1) // Refill the buffer
+
 	return nil
 }
 
