@@ -128,8 +128,6 @@ func (f *follower) Read(b []byte) (int, error) {
 		return 0, nil
 	}
 
-	fmt.Println(readable, "|", int64(len(b)))
-
 	n, err := f.reader.Read(b[:imin(int64(readable), int64(len(b)))])
 	f.mu.Unlock()
 
