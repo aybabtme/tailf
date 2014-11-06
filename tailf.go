@@ -35,13 +35,12 @@ type (
 type follower struct {
 	filename string
 
-	mu       sync.Mutex
-	notifyc  chan struct{}
-	errc     chan error
-	file     *os.File
-	reader   *bufio.Reader
-	watch    *fsnotify.Watcher
-	isClosed bool
+	mu      sync.Mutex
+	notifyc chan struct{}
+	errc    chan error
+	file    *os.File
+	reader  *bufio.Reader
+	watch   *fsnotify.Watcher
 }
 
 // Follow returns an io.ReadCloser that follows the writes to a file.
@@ -89,7 +88,6 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 func (f *follower) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.isClosed = true
 	werr := f.watch.Close()
 	cerr := f.file.Close()
 	switch {
@@ -136,10 +134,6 @@ func (f *follower) Read(b []byte) (int, error) {
 
 	n, err := f.reader.Read(b[:imin(int64(readable), int64(len(b)))])
 	f.mu.Unlock()
-
-	if !f.isClosed && err == io.EOF {
-		return n, nil
-	}
 
 	return n, err
 }
