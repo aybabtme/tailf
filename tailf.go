@@ -225,7 +225,9 @@ func (f *follower) reopenFile() error {
 	}
 
 	buf := bytes.NewBuffer(make([]byte, 0, f.fileReader.Buffered()))
-	if n, err := io.Copy(buf, f.fileReader); err != nil && n != int64(f.fileReader.Buffered()) {
+
+	n, err := io.Copy(buf, f.fileReader)
+	if err != nil && n != int64(f.fileReader.Buffered()) {
 		return err
 	}
 
