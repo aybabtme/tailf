@@ -229,7 +229,7 @@ func (f *follower) reopenFile() error {
 		return err
 	}
 
-	f.fileReader = bufio.NewReader(f.file)
+	f.fileReader.Reset(f.file)
 
 	f.reader = io.MultiReader(buf, f.fileReader)
 
