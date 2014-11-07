@@ -45,6 +45,7 @@ type follower struct {
 	rotationBuffer *bytes.Buffer
 	reader         io.Reader
 	watch          *fsnotify.Watcher
+	size           int64
 }
 
 // Follow returns an io.ReadCloser that follows the writes to a file.
@@ -81,6 +82,7 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 		fileReader: reader,
 		reader:     reader,
 		watch:      watch,
+		size:       0,
 	}
 
 	go f.followFile()
@@ -192,11 +194,10 @@ func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 		return nil
 	} else if ev.Op&fsnotify.Rename == fsnotify.Rename {
 		return nil
+	} else if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
+		return f.checkForTruncate()
 	} else if ev.Op&fsnotify.Write == fsnotify.Write {
 		return f.updateFile()
-	} else if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
-		// drop it
-		return nil
 	}
 
 	panic(fmt.Sprintf("unknown event: %#v", ev))
@@ -247,6 +248,34 @@ func (f *follower) updateFile() error {
 	}
 
 	return nil
+}
+
+// Note: if the file gets truncated, and before the size can be stat'd, \
+// it has regrown to be >= the same size as as previously, the truncate \
+// will be missed
+func (f *follower) checkForTruncate() error {
+	f.mu.Lock()
+
+	fi, err := os.Stat(f.filename)
+	if os.IsNotExist(err) {
+		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
+	}
+	if err != nil {
+		fmt.Println("Other error", err)
+		return err
+	}
+
+	f.mu.Unlock()
+
+	newSize := fi.Size()
+	if f.size > newSize {
+		err = f.reopenFile()
+	} else {
+		err = nil
+	}
+
+	f.size = newSize
+	return err
 }
 
 func imin(a, b int) int {
