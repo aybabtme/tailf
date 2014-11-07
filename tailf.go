@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"sync"
 
 	"gopkg.in/fsnotify.v1"
@@ -68,7 +69,7 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	if err := watch.Add(file.Name()); err != nil {
+	if err := watch.Add(path.Dir(file.Name())); err != nil {
 		return nil, err
 	}
 
@@ -158,10 +159,12 @@ func (f *follower) followFile() {
 			if !open {
 				return
 			}
-			err := f.handleFileEvent(ev)
-			if err != nil {
-				f.errc <- err
-				return
+			if ev.Name == f.filename {
+				err := f.handleFileEvent(ev)
+				if err != nil {
+					f.errc <- err
+					return
+				}
 			}
 		case err, open := <-f.watch.Errors:
 			if !open {
@@ -184,15 +187,11 @@ func (f *follower) followFile() {
 
 func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 	if ev.Op&fsnotify.Create == fsnotify.Create {
-		return ErrFileTruncated{
-			fmt.Errorf("new file created with this name: %v", ev.String()),
-		}
+		return f.reopenFile() // New file created with the same name
 	} else if ev.Op&fsnotify.Remove == fsnotify.Remove {
-		return ErrFileRemoved{
-			fmt.Errorf("file was removed: %v", ev.String()),
-		}
+		return nil
 	} else if ev.Op&fsnotify.Rename == fsnotify.Rename {
-		return f.reopenFile()
+		return nil
 	} else if ev.Op&fsnotify.Write == fsnotify.Write {
 		return f.updateFile()
 	} else if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
