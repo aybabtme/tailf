@@ -267,9 +267,11 @@ func (f *follower) checkForTruncate() error {
 
 	fi, err := os.Stat(f.filename)
 	if os.IsNotExist(err) {
+		f.mu.Unlock()
 		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
 	}
 	if err != nil {
+		f.mu.Unlock()
 		return err
 	}
 
