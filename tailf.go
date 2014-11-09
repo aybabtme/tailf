@@ -21,6 +21,7 @@ import (
 	"os"
 	"path"
 	"sync"
+	"syscall"
 
 	"gopkg.in/fsnotify.v1"
 )
@@ -113,7 +114,12 @@ func (f *follower) Read(b []byte) (int, error) {
 
 	// Refill the buffer
 	_, err := f.fileReader.Peek(1)
-	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
+	if err == nil || err == io.EOF || err == bufio.ErrBufferFull {
+		// If we've hit the end of the file or if the buffer \
+		// is already full, those aren't real errors at this stage
+	} else if err != nil && err.(*os.PathError).Err == syscall.Errno(0x9) {
+		// Trying to read from a bad file pointer, file was probably closed
+	} else {
 		return 0, err
 	}
 	readable := f.fileReader.Buffered()
