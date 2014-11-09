@@ -225,7 +225,7 @@ func (f *follower) reopenFile() error {
 	}
 
 	unreadByteCount := f.fileReader.Buffered()
-	buf := bytes.NewBuffer(make([]byte, 0, unreadByteCount))
+	buf := bytes.NewBuffer(make([]byte, unreadByteCount))
 
 	n, err := f.fileReader.Read(buf.Bytes())
 	if err != nil {
@@ -264,7 +264,6 @@ func (f *follower) checkForTruncate() error {
 		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
 	}
 	if err != nil {
-		fmt.Println("Other error", err)
 		return err
 	}
 
