@@ -224,11 +224,14 @@ func (f *follower) reopenFile() error {
 		return err
 	}
 
-	buf := bytes.NewBuffer(make([]byte, 0, f.fileReader.Buffered()))
+	unreadByteCount := f.fileReader.Buffered()
+	buf := bytes.NewBuffer(make([]byte, 0, unreadByteCount))
 
-	n, err := io.Copy(buf, f.fileReader)
-	if err != nil && n != int64(f.fileReader.Buffered()) {
+	n, err := f.fileReader.Read(buf.Bytes())
+	if err != nil {
 		return err
+	} else if n != unreadByteCount {
+		return fmt.Errorf("Failed to flush the buffer completely: Actual(%d) | Expected(%d) | buf_len(%d)", n, unreadByteCount, buf.Len())
 	}
 
 	f.fileReader.Reset(f.file)
@@ -252,7 +255,7 @@ func (f *follower) updateFile() error {
 
 // Note: if the file gets truncated, and before the size can be stat'd, \
 // it has regrown to be >= the same size as as previously, the truncate \
-// will be missed
+// will be missed. tl;dr, don't use copy-truncate...
 func (f *follower) checkForTruncate() error {
 	f.mu.Lock()
 
