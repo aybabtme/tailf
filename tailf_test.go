@@ -1,8 +1,7 @@
-package tailf_test
+package tailf
 
 import (
 	"fmt"
-	"github.com/aybabtme/tailf"
 	"io"
 	"io/ioutil"
 	"log"
@@ -23,7 +22,7 @@ func canFollowFile(t *testing.T, filename string, file *os.File) error {
 
 	want := strings.Join(toWrite, "")
 
-	follow, err := tailf.Follow(filename, true)
+	follow, err := Follow(filename, true)
 	if err != nil {
 		return fmt.Errorf("creating follower: %v", err)
 	}
@@ -86,7 +85,7 @@ func canFollowFileFromEnd(t *testing.T, filename string, file *os.File) error {
 
 	want := strings.Join(toWrite, "")
 
-	follow, err := tailf.Follow(filename, false)
+	follow, err := Follow(filename, false)
 	if err != nil {
 		return fmt.Errorf("creating follower: %v", err)
 	}
