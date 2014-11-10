@@ -28,15 +28,15 @@ func canFollowFile(t *testing.T, filename string, file *os.File) error {
 
 	follow, err := tailf.Follow(filename, true)
 	if err != nil {
-		return fmt.Errorf("creating follower: %v", err)
+		t.Fatalf("Failed creating tailf.follower: '%v'", err)
 	}
 
 	go func() {
 		for _, str := range toWrite {
-			log.Printf("writing")
+			t.Logf("Writing %d bytes", len(str))
 			_, err := file.WriteString(str)
 			if err != nil {
-				t.Fatalf("failed to write to test file: %v", err)
+				t.Fatalf("Failed to write to file: '%v'", err)
 			}
 		}
 	}()
@@ -52,22 +52,22 @@ func canFollowFile(t *testing.T, filename string, file *os.File) error {
 	errc := make(chan error, 1)
 	go func() {
 		n, err := follow.Read(make([]byte, 1))
-		t.Logf("read %d bytes after closing", n)
+		t.Logf("Read %d bytes after closing", n)
 		errc <- err
 	}()
 
 	if err := follow.Close(); err != nil {
-		t.Errorf("failed to close follower: %v", err)
+		t.Errorf("Failed to close tailf.follower: %v", err)
 	}
 
 	got := string(data)
 	if want != got {
-		t.Errorf("want %v, got %v", want, got)
+		t.Errorf("Wanted '%v', got '%v'", want, got)
 	}
 
 	err = <-errc
 	if err != io.EOF {
-		t.Errorf("expected EOF after closing follower, got %v", err)
+		t.Errorf("Expected EOF after closing the follower, got '%v' instead", err)
 	}
 
 	return nil
@@ -171,15 +171,15 @@ func canFollowFileFromEnd(t *testing.T, filename string, file *os.File) error {
 
 	follow, err := tailf.Follow(filename, false)
 	if err != nil {
-		return fmt.Errorf("creating follower: %v", err)
+		t.Fatalf("Failed creating tailf.follower: %v", err)
 	}
 
 	go func() {
 		for _, str := range toWrite {
-			log.Printf("writing")
+			t.Logf("Writing %d bytes", len(str))
 			_, err := file.WriteString(str)
 			if err != nil {
-				t.Fatalf("failed to write to test file: %v", err)
+				t.Fatalf("Failed to write to file: '%v'", err)
 			}
 		}
 	}()
@@ -195,22 +195,61 @@ func canFollowFileFromEnd(t *testing.T, filename string, file *os.File) error {
 	errc := make(chan error, 1)
 	go func() {
 		n, err := io.ReadAtLeast(follow, make([]byte, 1), 1)
-		t.Logf("read %d bytes after closing", n)
+		t.Logf("Read %d bytes after closing", n)
 		errc <- err
 	}()
 
 	if err := follow.Close(); err != nil {
-		t.Errorf("failed to close follower: %v", err)
+		t.Errorf("Failed to close tailf.follower: %v", err)
 	}
 
 	got := string(data)
 	if want != got {
-		t.Errorf("want %v, got %v", want, got)
+		t.Errorf("Wanted '%v', got '%v'", want, got)
 	}
 
 	err = <-errc
 	if err != io.EOF {
-		t.Errorf("expected EOF after closing follower, got %v", err)
+		t.Errorf("Expected EOF after closing the follower, got '%v' instead", err)
+	}
+
+	return nil
+}
+
+func TestFollowTruncation(t *testing.T) { withTempFile(t, canFollowTruncation) }
+
+func canFollowTruncation(t *testing.T, filename string, file *os.File) error {
+	follow, err := tailf.Follow(filename, false)
+	if err != nil {
+		t.Fatalf("Failed creating tailf.follower: %v", err)
+	}
+
+	for i := int64(0); i < 5; i++ {
+		if i%2 == 0 {
+			t.Logf("Truncating the file")
+			file, err := os.OpenFile(filename, os.O_TRUNC, os.ModeTemporary)
+			if err != nil {
+				t.Errorf("Unable to truncate file")
+			}
+			file.Close()
+		}
+
+		expected := strconv.AppendInt(make([]byte, 0), i, 10)
+		_, err = file.WriteString(string(expected))
+		if err != nil {
+			t.Error("Write failed")
+		}
+
+		test_buf := make([]byte, 1)
+		follow.Read(test_buf)
+		t.Logf("ReadByte: Actual(%v) ?= Expected(%v)", test_buf, expected)
+		if !bytes.Equal(test_buf, expected) {
+			t.Errorf("Missed write after truncation")
+		}
+	}
+
+	if err := follow.Close(); err != nil {
+		t.Errorf("Failed to close tailf.follower: %v", err)
 	}
 
 	return nil
