@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"sync"
 	"syscall"
 
@@ -71,7 +70,7 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	if err := watch.Add(path.Dir(file.Name())); err != nil {
+	if err := watch.Add(file.Name()); err != nil {
 		return nil, err
 	}
 
@@ -114,13 +113,22 @@ func (f *follower) Read(b []byte) (int, error) {
 
 	// Refill the buffer
 	_, err := f.fileReader.Peek(1)
-	if err == nil || err == io.EOF || err == bufio.ErrBufferFull {
-		// If we've hit the end of the file or if the buffer \
-		// is already full, those aren't real errors at this stage
-	} else if err != nil && err.(*os.PathError).Err == syscall.Errno(0x9) {
-		// Trying to read from a bad file pointer, file was probably closed
-	} else {
-		return 0, err
+	switch err { // some errors are expected
+	case nil:
+		// all is good
+	case io.EOF:
+		// `readable` will be 0 and we will block
+		// until inotify reports new data, carry on
+	case bufio.ErrBufferFull:
+		// the bufio.Reader was already full, carry on
+	default:
+		perr, ok := err.(*os.PathError)
+		if ok && perr.Err == syscall.Errno(syscall.EBADF) {
+			// bad file number will likely be replaced by
+			// a new file on an inotify event, so carry on
+		} else {
+			return 0, err
+		}
 	}
 	readable := f.fileReader.Buffered()
 
@@ -160,7 +168,6 @@ func (f *follower) followFile() {
 	defer f.watch.Close()
 	defer close(f.notifyc)
 	defer close(f.errc)
-	// defer log.Printf("quitting the follow loop")
 	for {
 		select {
 		case ev, open := <-f.watch.Events:
@@ -194,19 +201,27 @@ func (f *follower) followFile() {
 }
 
 func (f *follower) handleFileEvent(ev fsnotify.Event) error {
-	if ev.Op&fsnotify.Create == fsnotify.Create {
-		return f.reopenFile() // New file created with the same name
-	} else if ev.Op&fsnotify.Remove == fsnotify.Remove {
-		return nil
-	} else if ev.Op&fsnotify.Rename == fsnotify.Rename {
-		return nil
-	} else if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
-		return f.checkForTruncate()
-	} else if ev.Op&fsnotify.Write == fsnotify.Write {
+	switch {
+	case isOp(ev, fsnotify.Write):
+		// the general case where we wake up those waiting
+		// for more data
 		return f.updateFile()
-	}
 
-	panic(fmt.Sprintf("unknown event: %#v", ev))
+	case isOp(ev, fsnotify.Create):
+		// new file created with the same name
+		return f.reopenFile()
+
+	case isOp(ev, fsnotify.Remove), isOp(ev, fsnotify.Rename):
+		// wait for a new file to be created
+		return nil
+
+	case isOp(ev, fsnotify.Chmod):
+		// file might have been truncated
+		return f.checkForTruncate()
+
+	default:
+		panic(fmt.Sprintf("unknown event: %#v", ev))
+	}
 }
 
 func (f *follower) reopenFile() error {
@@ -230,6 +245,7 @@ func (f *follower) reopenFile() error {
 		return err
 	}
 
+	// recover buffered bytes
 	unreadByteCount := f.fileReader.Buffered()
 	buf := bytes.NewBuffer(make([]byte, unreadByteCount))
 
@@ -242,6 +258,7 @@ func (f *follower) reopenFile() error {
 
 	f.fileReader.Reset(f.file)
 
+	// append buffered bytes before the new file
 	f.reader = io.MultiReader(buf, f.fileReader)
 
 	return err
@@ -252,30 +269,31 @@ func (f *follower) updateFile() error {
 	defer f.mu.Unlock()
 
 	_, err := f.fileReader.Peek(1) // Refill the buffer
-	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
+	switch err {
+	case nil, io.EOF, bufio.ErrBufferFull:
+		// all good
+		return nil
+	default:
+		// not nil and not an expected error
 		return err
 	}
-
-	return nil
 }
 
-// Note: if the file gets truncated, and before the size can be stat'd, \
-// it has regrown to be >= the same size as as previously, the truncate \
+// Note: if the file gets truncated, and before the size can be stat'd,
+// it has regrown to be >= the same size as previously, the truncate
 // will be missed. tl;dr, don't use copy-truncate...
 func (f *follower) checkForTruncate() error {
 	f.mu.Lock()
 
 	fi, err := os.Stat(f.filename)
+
+	f.mu.Unlock()
 	if os.IsNotExist(err) {
-		f.mu.Unlock()
 		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
 	}
 	if err != nil {
-		f.mu.Unlock()
 		return err
 	}
-
-	f.mu.Unlock()
 
 	newSize := fi.Size()
 	if f.size > newSize {
@@ -286,6 +304,10 @@ func (f *follower) checkForTruncate() error {
 
 	f.size = newSize
 	return err
+}
+
+func isOp(ev fsnotify.Event, op fsnotify.Op) bool {
+	return ev.Op&op == op
 }
 
 func imin(a, b int) int {

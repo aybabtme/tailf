@@ -1,4 +1,4 @@
-package tailf
+package tailf_test
 
 import (
 	"fmt"
@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aybabtme/tailf"
 )
 
 func TestCanFollowFile(t *testing.T) { withTempFile(t, canFollowFile) }
@@ -22,7 +24,7 @@ func canFollowFile(t *testing.T, filename string, file *os.File) error {
 
 	want := strings.Join(toWrite, "")
 
-	follow, err := Follow(filename, true)
+	follow, err := tailf.Follow(filename, true)
 	if err != nil {
 		return fmt.Errorf("creating follower: %v", err)
 	}
@@ -85,7 +87,7 @@ func canFollowFileFromEnd(t *testing.T, filename string, file *os.File) error {
 
 	want := strings.Join(toWrite, "")
 
-	follow, err := Follow(filename, false)
+	follow, err := tailf.Follow(filename, false)
 	if err != nil {
 		return fmt.Errorf("creating follower: %v", err)
 	}
@@ -110,7 +112,7 @@ func canFollowFileFromEnd(t *testing.T, filename string, file *os.File) error {
 	// this should block forever
 	errc := make(chan error, 1)
 	go func() {
-		n, err := follow.Read(make([]byte, 1))
+		n, err := io.ReadAtLeast(follow, make([]byte, 1), 1)
 		t.Logf("read %d bytes after closing", n)
 		errc <- err
 	}()
