@@ -14,11 +14,16 @@ return EOF.
 package tailf
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
-	"gopkg.in/fsnotify.v1"
 	"io"
 	"os"
+	"path"
 	"sync"
+	"syscall"
+
+	"gopkg.in/fsnotify.v1"
 )
 
 type (
@@ -32,14 +37,16 @@ type (
 
 type follower struct {
 	filename string
-	offset   int64
-	maxSize  int64
 
-	mu      sync.Mutex
-	notifyc chan struct{}
-	errc    chan error
-	file    *os.File
-	watch   *fsnotify.Watcher
+	mu             sync.Mutex
+	notifyc        chan struct{}
+	errc           chan error
+	file           *os.File
+	fileReader     *bufio.Reader
+	rotationBuffer *bytes.Buffer
+	reader         io.Reader
+	watch          *fsnotify.Watcher
+	size           int64
 }
 
 // Follow returns an io.ReadCloser that follows the writes to a file.
@@ -49,38 +56,34 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	var offset int64
 	if !fromStart {
-		n, err := file.Seek(0, os.SEEK_END)
+		_, err := file.Seek(0, os.SEEK_END)
 		if err != nil {
 			_ = file.Close()
 			return nil, err
 		}
-		offset = n
 	}
 
-	fi, err := os.Stat(file.Name())
-	if err != nil {
-		return nil, err
-	}
+	reader := bufio.NewReader(file)
 
 	watch, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
 
-	if err := watch.Add(file.Name()); err != nil {
+	if err := watch.Add(path.Dir(file.Name())); err != nil {
 		return nil, err
 	}
 
 	f := &follower{
-		filename: filename,
-		offset:   offset,
-		maxSize:  fi.Size(),
-		notifyc:  make(chan struct{}),
-		errc:     make(chan error),
-		file:     file,
-		watch:    watch,
+		filename:   filename,
+		notifyc:    make(chan struct{}),
+		errc:       make(chan error),
+		file:       file,
+		fileReader: reader,
+		reader:     reader,
+		watch:      watch,
+		size:       0,
 	}
 
 	go f.followFile()
@@ -108,7 +111,18 @@ func (f *follower) Close() error {
 
 func (f *follower) Read(b []byte) (int, error) {
 	f.mu.Lock()
-	readable := f.maxSize - f.offset
+
+	// Refill the buffer
+	_, err := f.fileReader.Peek(1)
+	if err == nil || err == io.EOF || err == bufio.ErrBufferFull {
+		// If we've hit the end of the file or if the buffer \
+		// is already full, those aren't real errors at this stage
+	} else if err != nil && err.(*os.PathError).Err == syscall.Errno(0x9) {
+		// Trying to read from a bad file pointer, file was probably closed
+	} else {
+		return 0, err
+	}
+	readable := f.fileReader.Buffered()
 
 	// check for errors before doing anything
 	select {
@@ -136,8 +150,7 @@ func (f *follower) Read(b []byte) (int, error) {
 		return 0, nil
 	}
 
-	n, err := f.file.Read(b[:imin(readable, int64(len(b)))])
-	f.offset += int64(n)
+	n, err := f.reader.Read(b[:imin(readable, len(b))])
 	f.mu.Unlock()
 
 	return n, err
@@ -154,10 +167,12 @@ func (f *follower) followFile() {
 			if !open {
 				return
 			}
-			err := f.handleFileEvent(ev)
-			if err != nil {
-				f.errc <- err
-				return
+			if ev.Name == f.filename {
+				err := f.handleFileEvent(ev)
+				if err != nil {
+					f.errc <- err
+					return
+				}
 			}
 		case err, open := <-f.watch.Errors:
 			if !open {
@@ -180,20 +195,15 @@ func (f *follower) followFile() {
 
 func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 	if ev.Op&fsnotify.Create == fsnotify.Create {
-		return ErrFileTruncated{
-			fmt.Errorf("new file created with this name: %v", ev.String()),
-		}
+		return f.reopenFile() // New file created with the same name
 	} else if ev.Op&fsnotify.Remove == fsnotify.Remove {
-		return ErrFileRemoved{
-			fmt.Errorf("file was removed: %v", ev.String()),
-		}
+		return nil
 	} else if ev.Op&fsnotify.Rename == fsnotify.Rename {
-		return f.reopenFile()
+		return nil
+	} else if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
+		return f.checkForTruncate()
 	} else if ev.Op&fsnotify.Write == fsnotify.Write {
 		return f.updateFile()
-	} else if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
-		// drop it
-		return nil
 	}
 
 	panic(fmt.Sprintf("unknown event: %#v", ev))
@@ -203,7 +213,7 @@ func (f *follower) reopenFile() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	fi, err := os.Stat(f.filename)
+	_, err := os.Stat(f.filename)
 	if os.IsNotExist(err) {
 		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
 	}
@@ -211,14 +221,29 @@ func (f *follower) reopenFile() error {
 		return err
 	}
 
-	_ = f.file.Close()
-	f.maxSize = fi.Size()
+	if err := f.file.Close(); err != nil {
+		return err
+	}
+
 	f.file, err = os.OpenFile(f.filename, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
 
-	_, err = f.file.Seek(f.offset, os.SEEK_SET)
+	unreadByteCount := f.fileReader.Buffered()
+	buf := bytes.NewBuffer(make([]byte, unreadByteCount))
+
+	n, err := f.fileReader.Read(buf.Bytes())
+	if err != nil {
+		return err
+	} else if n != unreadByteCount {
+		return fmt.Errorf("Failed to flush the buffer completely: Actual(%d) | Expected(%d) | buf_len(%d)", n, unreadByteCount, buf.Len())
+	}
+
+	f.fileReader.Reset(f.file)
+
+	f.reader = io.MultiReader(buf, f.fileReader)
+
 	return err
 }
 
@@ -226,15 +251,44 @@ func (f *follower) updateFile() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	fi, err := os.Stat(f.filename)
-	if err != nil {
+	_, err := f.fileReader.Peek(1) // Refill the buffer
+	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
 		return err
 	}
-	f.maxSize = fi.Size()
+
 	return nil
 }
 
-func imin(a, b int64) int64 {
+// Note: if the file gets truncated, and before the size can be stat'd, \
+// it has regrown to be >= the same size as as previously, the truncate \
+// will be missed. tl;dr, don't use copy-truncate...
+func (f *follower) checkForTruncate() error {
+	f.mu.Lock()
+
+	fi, err := os.Stat(f.filename)
+	if os.IsNotExist(err) {
+		f.mu.Unlock()
+		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
+	}
+	if err != nil {
+		f.mu.Unlock()
+		return err
+	}
+
+	f.mu.Unlock()
+
+	newSize := fi.Size()
+	if f.size > newSize {
+		err = f.reopenFile()
+	} else {
+		err = nil
+	}
+
+	f.size = newSize
+	return err
+}
+
+func imin(a, b int) int {
 	if a < b {
 		return a
 	}
