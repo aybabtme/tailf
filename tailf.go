@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
+	"path/filepath"
 	"sync"
 	"syscall"
 
@@ -71,7 +71,7 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	if err := watch.Add(path.Dir(file.Name())); err != nil {
+	if err := watch.Add(filepath.Dir(file.Name())); err != nil {
 		return nil, err
 	}
 
@@ -175,7 +175,7 @@ func (f *follower) followFile() {
 			if !open {
 				return
 			}
-			if ev.Name == f.filename {
+			if pathEqual(ev.Name, f.filename) {
 				err := f.handleFileEvent(ev)
 				if err != nil {
 					f.errc <- err
@@ -314,6 +314,19 @@ func (f *follower) checkForTruncate() error {
 
 func isOp(ev fsnotify.Event, op fsnotify.Op) bool {
 	return ev.Op&op == op
+}
+
+func pathEqual(lhs, rhs string) bool {
+	var err error
+	lhs, err = filepath.Abs(lhs)
+	if err != nil {
+		return false
+	}
+	rhs, err = filepath.Abs(rhs)
+	if err != nil {
+		return false
+	}
+	return lhs == rhs
 }
 
 func imin(a, b int) int {
