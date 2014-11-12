@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"sync"
 	"syscall"
@@ -37,15 +38,14 @@ type (
 type follower struct {
 	filename string
 
-	mu             sync.Mutex
-	notifyc        chan struct{}
-	errc           chan error
-	file           *os.File
-	fileReader     *bufio.Reader
-	rotationBuffer *bytes.Buffer
-	reader         io.Reader
-	watch          *fsnotify.Watcher
-	size           int64
+	mu         sync.Mutex
+	notifyc    chan struct{}
+	errc       chan error
+	file       *os.File
+	fileReader *bufio.Reader
+	reader     io.Reader
+	watch      *fsnotify.Watcher
+	size       int64
 }
 
 // Follow returns an io.ReadCloser that follows the writes to a file.
@@ -201,27 +201,36 @@ func (f *follower) followFile() {
 }
 
 func (f *follower) handleFileEvent(ev fsnotify.Event) error {
-	switch {
-	case isOp(ev, fsnotify.Write):
+	var err error
+	if err == nil && isOp(ev, fsnotify.Create) {
+		// new file created with the same name
+		err = f.reopenFile()
+	}
+
+	if err == nil && (isOp(ev, fsnotify.Remove) || isOp(ev, fsnotify.Rename) || isOp(ev, fsnotify.Chmod)) {
+		// wait for a new file to be created
+		_ = f.watch.Remove(f.filename)
+		err = f.watch.Add(f.filename)
+		if err != nil {
+			return err
+		}
+
+		if _, serr := os.Stat(f.filename); serr == nil {
+			err = f.reopenFile()
+		}
+	}
+
+	if err == nil && isOp(ev, fsnotify.Write) {
 		// the general case where we wake up those waiting
 		// for more data
-		return f.updateFile()
-
-	case isOp(ev, fsnotify.Create):
-		// new file created with the same name
-		return f.reopenFile()
-
-	case isOp(ev, fsnotify.Remove), isOp(ev, fsnotify.Rename):
-		// wait for a new file to be created
-		return nil
-
-	case isOp(ev, fsnotify.Chmod):
-		// file might have been truncated
-		return f.checkForTruncate()
-
-	default:
-		panic(fmt.Sprintf("unknown event: %#v", ev))
+		err = f.updateFile()
 	}
+
+	if err != nil {
+		log.Printf("handleEvent error: %v", err)
+	}
+
+	return err
 }
 
 func (f *follower) reopenFile() error {
@@ -277,33 +286,6 @@ func (f *follower) updateFile() error {
 		// not nil and not an expected error
 		return err
 	}
-}
-
-// Note: if the file gets truncated, and before the size can be stat'd,
-// it has regrown to be >= the same size as previously, the truncate
-// will be missed. tl;dr, don't use copy-truncate...
-func (f *follower) checkForTruncate() error {
-	f.mu.Lock()
-
-	fi, err := os.Stat(f.filename)
-
-	f.mu.Unlock()
-	if os.IsNotExist(err) {
-		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
-	}
-	if err != nil {
-		return err
-	}
-
-	newSize := fi.Size()
-	if f.size > newSize {
-		err = f.reopenFile()
-	} else {
-		err = nil
-	}
-
-	f.size = newSize
-	return err
 }
 
 func isOp(ev fsnotify.Event, op fsnotify.Op) bool {
