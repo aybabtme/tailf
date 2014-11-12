@@ -224,7 +224,7 @@ func canFollowTruncation(t *testing.T, filename string, file *os.File) error {
 		t.Fatalf("Failed creating tailf.follower: %v", err)
 	}
 
-	for i := int64(0); i < 5; i++ {
+	for i := int64(0); i < 10; i++ {
 		if i%2 == 0 {
 			t.Logf("Truncating the file")
 			file, err := os.OpenFile(filename, os.O_TRUNC, os.ModeTemporary)

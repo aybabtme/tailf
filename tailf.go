@@ -204,11 +204,11 @@ func (f *follower) followFile() {
 func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 	switch {
 	case isOp(ev, fsnotify.Write):
-		// the general case where we wake up those waiting
-		// for more data
+		// On write, check to see if the file has been truncated
+		// If not, insure the bufio buffer is full
 		switch f.checkForTruncate() {
 		case nil:
-			return f.updateFile()
+			return f.fillFileBuffer()
 		default:
 			return f.reopenFile()
 		}
@@ -222,13 +222,8 @@ func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 		return nil
 
 	case isOp(ev, fsnotify.Chmod):
-		// file might have been truncated
-		switch f.checkForTruncate() {
-		case nil:
-			return nil
-		default:
-			return f.reopenFile()
-		}
+		// Modified time on the file changed, noop
+		return nil
 
 	default:
 		panic(fmt.Sprintf("unknown event: %#v", ev))
@@ -275,7 +270,7 @@ func (f *follower) reopenFile() error {
 	return err
 }
 
-func (f *follower) updateFile() error {
+func (f *follower) fillFileBuffer() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
