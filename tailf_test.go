@@ -236,40 +236,41 @@ func canFollowTruncation(t *testing.T, filename string, file *os.File) error {
 
 	for i := int64(0); i < 10; i++ {
 		if i%2 == 0 {
-			t.Logf("truncating file")
+			t.Logf("Truncating the file")
 			file, err := os.OpenFile(filename, os.O_TRUNC, os.ModeTemporary)
 			if err != nil {
-				t.Errorf("unable to truncate file: %v", err)
+				t.Fatalf("Unable to truncate file: %v", err)
 			}
-			err = file.Close()
+			file.Close()
 		}
 
 		wantBuf := strconv.AppendInt(make([]byte, 0), i, 10)
 		_, err = file.WriteString(string(wantBuf))
 		if err != nil {
-			t.Errorf("write failed, %v", err)
+			t.Errorf("Write failed, %v", err)
 		}
 
 		gotBuf := make([]byte, 1)
 		_, err := follow.Read(gotBuf)
 		if err != nil {
-			t.Fatalf("failed to read: %v", err)
+			t.Fatalf("Failed to read: %v", err)
 		}
 
 		if !bytes.Equal(gotBuf, wantBuf) {
-			t.Logf("want=%x", wantBuf)
+			t.Logf("Want=%x", wantBuf)
 			t.Logf(" got=%x", gotBuf)
-			t.Errorf("missed write after truncation")
+			t.Errorf("Missed write after truncation")
 		}
 	}
 
 	if err := follow.Close(); err != nil {
-		t.Errorf("failed to close follower: %v", err)
+		t.Errorf("Failed to close follower: %v", err)
 	}
 
 	return nil
 }
 
+// Continually read from a file that is having data written to it every 5ms, and randomly truncated every [5,55]ms
 func TestFollowRandomTruncation(t *testing.T) {
 	withTempFile(t, func(t *testing.T, filename string, file *os.File) error {
 		follow, err := tailf.Follow(filename, false)
@@ -279,7 +280,7 @@ func TestFollowRandomTruncation(t *testing.T) {
 
 		expected := "Bytes!"
 
-		writer := time.NewTicker(time.Millisecond * 10)
+		writer := time.NewTicker(time.Millisecond * 5)
 		defer writer.Stop()
 
 		go func() {
@@ -291,12 +292,12 @@ func TestFollowRandomTruncation(t *testing.T) {
 
 		go func() {
 			for {
-				time.Sleep(time.Duration(time.Millisecond) * time.Duration(rand.Intn(50)+10))
+				time.Sleep(time.Duration(time.Millisecond) * time.Duration(rand.Intn(50)+5))
 
 				t.Log("Truncating the file")
 				trunc, err := os.OpenFile(filename, os.O_TRUNC, os.ModeTemporary)
 				if err != nil {
-					t.Errorf("Unable to truncate file")
+					t.Fatalf("Unable to truncate file")
 				}
 				trunc.Close()
 			}
@@ -316,9 +317,56 @@ func TestFollowRandomTruncation(t *testing.T) {
 			}
 		}()
 
-		time.Sleep(time.Duration(time.Millisecond * 500))
+		time.Sleep(time.Duration(time.Millisecond * 100))
 		follow.Close()
 
+		return nil
+	})
+}
+
+// Run for 50ms constantly trying to read from a tailf.follower that has nothing to read
+func TestSpinningReader(t *testing.T) {
+	withTempFile(t, func(t *testing.T, filename string, file *os.File) error {
+		follow, err := tailf.Follow(filename, false)
+		if err != nil {
+			t.Fatalf("Failed creating tailf.follower: %v", err)
+		}
+
+		stop := make(chan struct{})
+		timeout := time.AfterFunc(time.Duration(time.Millisecond*50), func() { stop <- struct{}{} })
+
+		read := make(chan struct{}, 1000)
+		go func() {
+			t.Log("Reader running")
+			buf := make([]byte, 100)
+			for {
+				_, err := follow.Read(buf)
+				if err != nil {
+					t.Errorf("Read error: %v", err)
+				}
+				t.Log("Read completed")
+				read <- struct{}{}
+			}
+		}()
+
+		count := 0
+
+		func() {
+			for {
+				select {
+				case <-stop:
+					return
+				case <-read:
+					count += 1
+					if count > 5 {
+						t.Error("Spinning on read")
+					}
+				}
+			}
+		}()
+
+		t.Logf("Read ran '%v' times", count)
+		timeout.Stop()
 		return nil
 	})
 }
