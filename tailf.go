@@ -76,14 +76,15 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 	}
 
 	f := &follower{
-		filename:   filename,
-		notifyc:    make(chan struct{}),
-		errc:       make(chan error),
-		file:       file,
-		fileReader: reader,
-		reader:     reader,
-		watch:      watch,
-		size:       0,
+		filename:       filename,
+		notifyc:        make(chan struct{}),
+		errc:           make(chan error),
+		file:           file,
+		fileReader:     reader,
+		rotationBuffer: bytes.NewBuffer(nil),
+		reader:         reader,
+		watch:          watch,
+		size:           0,
 	}
 
 	go f.followFile()
@@ -236,7 +237,8 @@ func (f *follower) reopenFile() error {
 
 	_, err := os.Stat(f.filename)
 	if os.IsNotExist(err) {
-		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
+		// File disappeared too quickly, wait for next rotation
+		return nil
 	}
 	if err != nil {
 		return err
@@ -252,10 +254,10 @@ func (f *follower) reopenFile() error {
 	}
 
 	// recover buffered bytes
-	unreadByteCount := f.fileReader.Buffered()
+	unreadByteCount := f.rotationBuffer.Len() + f.fileReader.Buffered()
 	buf := bytes.NewBuffer(make([]byte, unreadByteCount))
 
-	n, err := f.fileReader.Read(buf.Bytes())
+	n, err := f.reader.Read(buf.Bytes())
 	if err != nil {
 		return err
 	} else if n != unreadByteCount {
@@ -263,9 +265,10 @@ func (f *follower) reopenFile() error {
 	}
 
 	f.fileReader.Reset(f.file)
+	f.rotationBuffer = buf
 
 	// append buffered bytes before the new file
-	f.reader = io.MultiReader(buf, f.fileReader)
+	f.reader = io.MultiReader(f.rotationBuffer, f.fileReader)
 
 	return err
 }
