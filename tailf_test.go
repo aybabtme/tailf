@@ -372,22 +372,27 @@ func TestSpinningReader(t *testing.T) {
 }
 
 func withTempFile(t *testing.T, action func(t *testing.T, filename string, file *os.File) error) {
-	timeout := time.AfterFunc(time.Second*5, func() { panic("too long") })
-	defer timeout.Stop()
-
 	dir, err := ioutil.TempDir(os.TempDir(), "tailf_test_dir")
 	if err != nil {
-		t.Fatalf("couldn't create temp dir: %v", err)
+		t.Fatalf("Unable to create temp dir: '%v'", err)
 	}
+
 	file, err := ioutil.TempFile(dir, "tailf_test")
 	if err != nil {
-		t.Fatalf("couldn't create temp file: %v", err)
+		t.Fatalf("Unable to create temp file: %v", err)
 	}
 	defer os.RemoveAll(dir)
 	defer file.Close()
 
-	err = action(t, file.Name(), file)
-	if err != nil {
-		t.Errorf("failure: %v", err)
+	errc := make(chan error)
+	go func() { errc <- action(t, file.Name(), file) }()
+
+	select {
+	case err = <-errc:
+		if err != nil {
+			t.Errorf("failure: %v", err)
+		}
+	case <-time.After(time.Millisecond * 150):
+		t.Fatal("Test took too long :(")
 	}
 }
