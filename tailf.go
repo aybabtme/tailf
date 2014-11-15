@@ -203,6 +203,10 @@ func (f *follower) followFile() {
 
 func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 	switch {
+	case isOp(ev, fsnotify.Create):
+		// new file created with the same name
+		return f.reopenFile()
+
 	case isOp(ev, fsnotify.Write):
 		// On write, check to see if the file has been truncated
 		// If not, insure the bufio buffer is full
@@ -212,10 +216,6 @@ func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 		default:
 			return f.reopenFile()
 		}
-
-	case isOp(ev, fsnotify.Create):
-		// new file created with the same name
-		return f.reopenFile()
 
 	case isOp(ev, fsnotify.Remove), isOp(ev, fsnotify.Rename):
 		// wait for a new file to be created
