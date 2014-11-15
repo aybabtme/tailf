@@ -3,7 +3,6 @@ package tailf_test
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -53,17 +52,22 @@ func canFollowFile(t *testing.T, filename string, file *os.File) error {
 
 	// this should work, without blocking forever
 	data := make([]byte, len(want))
-	_, err = io.ReadAtLeast(follow, data, len(want))
+	n, err := io.ReadAtLeast(follow, data, len(want))
 	if err != nil {
 		return err
 	}
+	t.Logf("Read %d bytes", n)
 
-	// this should block forever
-	errc := make(chan error, 1)
+	errc := make(chan error)
 	go func() {
-		n, err := follow.Read(make([]byte, 1))
-		t.Logf("Read %d bytes after closing", n)
-		errc <- err
+		// Client reading from the follower
+		for {
+			n, err := follow.Read(make([]byte, 1))
+			t.Logf("Read %d bytes after closing", n)
+			if err != nil {
+				errc <- err
+			}
+		}
 	}()
 
 	if err := follow.Close(); err != nil {
@@ -75,9 +79,19 @@ func canFollowFile(t *testing.T, filename string, file *os.File) error {
 		t.Errorf("Wanted '%v', got '%v'", want, got)
 	}
 
-	err = <-errc
-	if err != io.EOF {
-		t.Errorf("Expected EOF after closing the follower, got '%v' instead", err)
+	for {
+		select {
+		case err := <-errc:
+			switch err {
+			case io.EOF:
+				t.Log("EOF recieved, ending")
+				return nil
+			default:
+				t.Errorf("Expected EOF after closing the follower, got '%v' instead", err)
+			}
+		case <-time.After(time.Duration(time.Millisecond * 100)):
+			t.Error("Expected follower to return after f.Close() faster")
+		}
 	}
 
 	return nil
@@ -100,7 +114,7 @@ func canFollowFileOverwritten(t *testing.T, filename string, file *os.File) erro
 
 	follow, err := tailf.Follow(filename, true)
 	if err != nil {
-		return fmt.Errorf("creating follower: %v", err)
+		t.Errorf("Creating tailf.follower: %v", err)
 	}
 
 	go func() {
@@ -112,9 +126,13 @@ func canFollowFileOverwritten(t *testing.T, filename string, file *os.File) erro
 			}
 		}
 
+		file.Sync()
+
 		if err := os.Remove(filename); err != nil {
 			t.Fatalf("couldn't delete file %q: %v", filename, err)
 		}
+
+		file.Sync()
 
 		file, err = os.Create(filename)
 		if err != nil {
@@ -138,26 +156,13 @@ func canFollowFileOverwritten(t *testing.T, filename string, file *os.File) erro
 		return err
 	}
 
-	// this should block forever
-	errc := make(chan error, 1)
-	go func() {
-		n, err := follow.Read(make([]byte, 1))
-		t.Logf("read %d bytes after closing", n)
-		errc <- err
-	}()
-
 	if err := follow.Close(); err != nil {
-		t.Errorf("failed to close follower: %v", err)
+		t.Errorf("Failed to close tailf.follower: %v", err)
 	}
 
 	got := string(data)
 	if want != got {
-		t.Errorf("want %v, got %v", want, got)
-	}
-
-	err = <-errc
-	if err != io.EOF {
-		t.Errorf("expected EOF after closing follower, got %v", err)
+		t.Errorf("Wanted: [%d]byte{'%v'}, Got: [%d]byte{'%v'}", len(want), want, len(got), got)
 	}
 
 	return nil
@@ -231,7 +236,7 @@ func TestFollowTruncation(t *testing.T) { withTempFile(t, canFollowTruncation) }
 func canFollowTruncation(t *testing.T, filename string, file *os.File) error {
 	follow, err := tailf.Follow(filename, false)
 	if err != nil {
-		t.Fatalf("failed to create follower: %v", err)
+		t.Fatalf("Failed creating tailf.follower: %v", err)
 	}
 
 	for i := int64(0); i < 10; i++ {
@@ -264,7 +269,7 @@ func canFollowTruncation(t *testing.T, filename string, file *os.File) error {
 	}
 
 	if err := follow.Close(); err != nil {
-		t.Errorf("Failed to close follower: %v", err)
+		t.Errorf("Failed to close tailf.follower: %v", err)
 	}
 
 	return nil
