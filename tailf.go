@@ -215,7 +215,7 @@ func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 		case nil:
 			return f.fillFileBuffer()
 		case ErrFileRemoved{}:
-			// If file was written too and then removed before we could even Stat the file, just wait for the next creation
+			// If file was written to and then removed before we could even Stat the file, just wait for the next creation
 			return nil
 		default:
 			return f.reopenFile()
