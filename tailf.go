@@ -71,9 +71,14 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	if err := watch.Add(filepath.Dir(file.Name())); err != nil {
+	absolute_path, err := filepath.Abs(file.Name())
+	if err := watch.Add(absolute_path); err != nil {
 		return nil, err
 	}
+
+	// if err := watch.Add(filepath.Dir(file.Name())); err != nil {
+	// 	return nil, err
+	// }
 
 	f := &follower{
 		filename:       filename,
