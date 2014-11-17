@@ -325,7 +325,7 @@ func (f *follower) checkForTruncate() error {
 	return err
 }
 
-// This is here for situations where the directory the watched file sits in
+// This is here for situations where the directory the watched file sits in can't be inotified on
 func (f *follower) pollForChanges() {
 	previous_file, err := os.Stat(f.filename)
 	if err != nil {
@@ -341,11 +341,9 @@ func (f *follower) pollForChanges() {
 		case nil:
 			switch os.SameFile(current_file, previous_file) {
 			case true:
-				fmt.Println("No change")
 				// No change, do nothing
 				break
 			case false:
-				fmt.Println("Rotation detected")
 				previous_file = current_file
 				if err := f.reopenFile(); err != nil {
 					f.errc <- err
@@ -356,7 +354,6 @@ func (f *follower) pollForChanges() {
 				}
 			}
 		default:
-			fmt.Println("File poofed")
 			// Filename doens't seem to be there, wait for it to re-appear
 		}
 
