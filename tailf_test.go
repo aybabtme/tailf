@@ -380,7 +380,6 @@ func TestSpinningReader(t *testing.T) {
 	})
 }
 
-func withTempFile(t *testing.T, action func(t *testing.T, filename string, file *os.File) error) {
 func withTempFile(t *testing.T, timeout time.Duration, action func(t *testing.T, filename string, file *os.File) error) {
 	dir, err := ioutil.TempDir(os.TempDir(), "tailf_test_dir")
 	if err != nil {
