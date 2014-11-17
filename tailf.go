@@ -336,7 +336,7 @@ func (f *follower) pollForChanges() {
 		f.errc <- err
 	}
 
-	for current_file, err := os.Stat(f.filename); ; current_file, err = os.Stat(f.filename) {
+	for current_file, err := f.file.Stat(); ; current_file, err = os.Stat(f.filename) {
 		switch err {
 		case nil:
 			switch os.SameFile(current_file, previous_file) {
