@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"gopkg.in/fsnotify.v1"
 )
@@ -71,17 +72,13 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	absolute_path, err := filepath.Abs(file.Name())
-	if err := watch.Add(absolute_path); err != nil {
+	absolute_path, err := filepath.Abs(filename)
+	if err != nil {
 		return nil, err
 	}
 
-	// if err := watch.Add(filepath.Dir(file.Name())); err != nil {
-	// 	return nil, err
-	// }
-
 	f := &follower{
-		filename:       filename,
+		filename:       absolute_path,
 		notifyc:        make(chan struct{}),
 		errc:           make(chan error),
 		file:           file,
@@ -90,6 +87,11 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 		reader:         reader,
 		watch:          watch,
 		size:           0,
+	}
+
+	if err := watch.Add(filepath.Dir(absolute_path)); err != nil {
+		// If we can't watch the directory, we need to poll the file to see if it changes
+		go f.pollForChanges()
 	}
 
 	go f.followFile()
@@ -321,6 +323,45 @@ func (f *follower) checkForTruncate() error {
 
 	f.size = newSize
 	return err
+}
+
+// This is here for situations where the directory the watched file sits in
+func (f *follower) pollForChanges() {
+	previous_file, err := os.Stat(f.filename)
+	if err != nil {
+		f.errc <- err
+	}
+
+	if err := f.watch.Add(f.filename); err != nil {
+		f.errc <- err
+	}
+
+	for current_file, err := os.Stat(f.filename); ; current_file, err = os.Stat(f.filename) {
+		switch err {
+		case nil:
+			switch os.SameFile(current_file, previous_file) {
+			case true:
+				fmt.Println("No change")
+				// No change, do nothing
+				break
+			case false:
+				fmt.Println("Rotation detected")
+				previous_file = current_file
+				if err := f.reopenFile(); err != nil {
+					f.errc <- err
+				}
+
+				if err := f.watch.Add(f.filename); err != nil {
+					f.errc <- err
+				}
+			}
+		default:
+			fmt.Println("File poofed")
+			// Filename doens't seem to be there, wait for it to re-appear
+		}
+
+		time.Sleep(time.Second)
+	}
 }
 
 func isOp(ev fsnotify.Event, op fsnotify.Op) bool {
