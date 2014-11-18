@@ -327,7 +327,7 @@ func (f *follower) checkForTruncate() error {
 
 // This is here for situations where the directory the watched file sits in can't be inotified on
 func (f *follower) pollForChanges() {
-	previous_file, err := os.Stat(f.filename)
+	previous_file, err := f.file.Stat()
 	if err != nil {
 		f.errc <- err
 	}
@@ -336,7 +336,7 @@ func (f *follower) pollForChanges() {
 		f.errc <- err
 	}
 
-	for current_file, err := f.file.Stat(); ; current_file, err = os.Stat(f.filename) {
+	for current_file, err := os.Stat(f.filename); ; current_file, err = os.Stat(f.filename) {
 		switch err {
 		case nil:
 			switch os.SameFile(current_file, previous_file) {
