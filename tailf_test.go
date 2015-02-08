@@ -396,9 +396,6 @@ func TestPollingReader(t *testing.T) {
 			t.Fatalf("Unable to modify tempdir's permissions to disallow listing its contents")
 		}
 
-		// fmt.Println(filename)
-		// time.Sleep(time.Second * 5)
-
 		follow, err := tailf.Follow(filename, false)
 		if err != nil {
 			t.Fatalf("Failed creating tailf.follower: %v", err)
