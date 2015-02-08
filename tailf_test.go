@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"testing"
@@ -376,6 +377,90 @@ func TestSpinningReader(t *testing.T) {
 
 		t.Logf("Read ran '%v' times", count)
 		timeout.Stop()
+		return nil
+	})
+}
+
+// Test to see that our polling
+func TestPollingReader(t *testing.T) {
+	// Timestamp this stuff
+	go func() {
+		for {
+			t.Logf("Timestamp: %v", time.Now())
+			<-time.After(time.Millisecond * 250)
+		}
+	}()
+
+	withTempFile(t, time.Second*1, func(t *testing.T, filename string, file *os.File) error {
+		if err := os.Chmod(path.Dir(filename), 0355); err != nil {
+			t.Fatalf("Unable to modify tempdir's permissions to disallow listing its contents")
+		}
+
+		// fmt.Println(filename)
+		// time.Sleep(time.Second * 5)
+
+		follow, err := tailf.Follow(filename, false)
+		if err != nil {
+			t.Fatalf("Failed creating tailf.follower: %v", err)
+		}
+
+		scanner := bufio.NewScanner(follow)
+		scanner.Split(bufio.ScanBytes)
+		wanted := make([]byte, 1)
+
+		//
+		// Write out 10 bytes
+		for i := 1; i <= 10; i++ {
+			file.Write([]byte{byte(i)})
+			t.Logf("Wrote '%v' out", i)
+		}
+
+		//
+		// Read in 9 bytes
+		for i := 1; i <= 9 && scanner.Scan(); i++ {
+			wanted[0] = byte(i)
+			got := scanner.Bytes()
+
+			t.Logf("Read: wanted(%v) ?= got(%v)", wanted, got)
+			if !bytes.Equal(wanted, got) {
+				t.Errorf("Read: wanted(%v) != got(%v)", wanted, got)
+			}
+		}
+
+		//
+		// Rotate the file
+		func() {
+			t.Logf("Removing: '%v'", file.Name())
+			if err := os.Remove(filename); err != nil {
+				t.Fatal("Unable to remove the temp file")
+			}
+
+			file, err = os.Create(filename)
+			if err != nil {
+				t.Fatal("Unable to recreate the temp file")
+			}
+			t.Logf("Created: '%v'", file.Name())
+		}()
+
+		//
+		// Write out 10 more bytes
+		for i := 11; i <= 20; i++ {
+			file.Write([]byte{byte(i)})
+			t.Logf("Wrote '%v' out", i)
+		}
+
+		//
+		// Read in the last 11 bytes
+		for i := 10; i <= 20 && scanner.Scan(); i++ {
+			wanted[0] = byte(i)
+			got := scanner.Bytes()
+
+			t.Logf("Read: wanted(%v) ?= got(%v)", wanted, got)
+			if !bytes.Equal(wanted, got) {
+				t.Errorf("Read: wanted(%v) != got(%v)", wanted, got)
+			}
+		}
+
 		return nil
 	})
 }
