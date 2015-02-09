@@ -391,7 +391,7 @@ func TestPollingReader(t *testing.T) {
 		}
 	}()
 
-	withTempFile(t, time.Second*1, func(t *testing.T, filename string, file *os.File) error {
+	withTempFile(t, time.Second*2, func(t *testing.T, filename string, file *os.File) error {
 		if err := os.Chmod(path.Dir(filename), 0355); err != nil {
 			t.Fatalf("Unable to modify tempdir's permissions to disallow listing its contents")
 		}
