@@ -427,7 +427,7 @@ func TestPollingReader(t *testing.T) {
 		//
 		// Rotate the file
 		func() {
-			t.Logf("Removing: '%v'", file.Name())
+			t.Logf("Removing: %v:'%v'", file, file.Name())
 			if err := os.Remove(filename); err != nil {
 				t.Fatal("Unable to remove the temp file")
 			}
@@ -436,7 +436,7 @@ func TestPollingReader(t *testing.T) {
 			if err != nil {
 				t.Fatal("Unable to recreate the temp file")
 			}
-			t.Logf("Created: '%v'", file.Name())
+			t.Logf("Created: %v:'%v'", file, file.Name())
 		}()
 
 		//
