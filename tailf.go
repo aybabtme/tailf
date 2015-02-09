@@ -352,7 +352,13 @@ func (f *follower) pollForChanges() {
 				if err := f.watch.Add(f.filename); err != nil {
 					f.errc <- err
 				}
-				f.notifyc <- struct{}{}
+
+				select {
+				case f.notifyc <- struct{}{}:
+					// try to wake up whoever was waiting on an update
+				default:
+					// otherwise just wait for the next event
+				}
 			}
 		default:
 			// Filename doens't seem to be there, wait for it to re-appear
