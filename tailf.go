@@ -352,6 +352,7 @@ func (f *follower) pollForChanges() {
 				if err := f.watch.Add(f.filename); err != nil {
 					f.errc <- err
 				}
+				f.notifyc <- struct{}{}
 			}
 		default:
 			// Filename doens't seem to be there, wait for it to re-appear
