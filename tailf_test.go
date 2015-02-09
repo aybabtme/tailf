@@ -336,7 +336,7 @@ func TestFollowRandomTruncation(t *testing.T) {
 
 // Run for 50ms constantly trying to read from a tailf.follower that has nothing to read
 func TestSpinningReader(t *testing.T) {
-	withTempFile(t, time.Millisecond*150, func(t *testing.T, filename string, file *os.File) error {
+	withTempFile(t, time.Second*1, func(t *testing.T, filename string, file *os.File) error {
 		follow, err := tailf.Follow(filename, false)
 		if err != nil {
 			t.Fatalf("Failed creating tailf.follower: %v", err)
