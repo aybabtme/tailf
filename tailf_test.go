@@ -3,6 +3,7 @@ package tailf_test
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -38,7 +39,7 @@ func canFollowFile(t *testing.T, filename string, file *os.File) error {
 
 	follow, err := tailf.Follow(filename, true)
 	if err != nil {
-		t.Fatalf("failed creating tailf.follower: '%v'", err)
+		return fmt.Errorf("failed creating tailf.follower: '%v'", err)
 	}
 
 	go func() {
@@ -46,7 +47,7 @@ func canFollowFile(t *testing.T, filename string, file *os.File) error {
 			t.Logf("writing %d bytes", len(str))
 			_, err := file.WriteString(str)
 			if err != nil {
-				t.Fatalf("failed to write to the file: '%v'", err)
+				t.Errorf("failed to write to the file: '%v'", err)
 			}
 		}
 	}()
@@ -125,28 +126,28 @@ func canFollowFileOverwritten(t *testing.T, filename string, file *os.File) erro
 			t.Logf("writing %d bytes", len(str))
 			_, err := file.WriteString(str)
 			if err != nil {
-				t.Fatalf("failed to write to test file: %v", err)
+				t.Errorf("failed to write to test file: %v", err)
 			}
 		}
 
 		file.Sync()
 
 		if err := os.Remove(filename); err != nil {
-			t.Fatalf("couldn't delete file %q: %v", filename, err)
+			t.Errorf("couldn't delete file %q: %v", filename, err)
 		}
 
 		file.Sync()
 
 		file, err = os.Create(filename)
 		if err != nil {
-			t.Fatalf("failed to write to test file: %v", err)
+			t.Errorf("failed to write to test file: %v", err)
 		}
 		defer file.Close()
 		for _, str := range toWriteAgain {
 			t.Logf("writing %d bytes", len(str))
 			_, err := file.WriteString(str)
 			if err != nil {
-				t.Fatalf("failed to write to test file: %v", err)
+				t.Errorf("failed to write to test file: %v", err)
 			}
 		}
 
@@ -191,7 +192,7 @@ func canFollowFileFromEnd(t *testing.T, filename string, file *os.File) error {
 
 	follow, err := tailf.Follow(filename, false)
 	if err != nil {
-		t.Fatalf("failed creating tailf.follower: %v", err)
+		return fmt.Errorf("failed creating tailf.follower: %v", err)
 	}
 
 	go func() {
@@ -199,7 +200,7 @@ func canFollowFileFromEnd(t *testing.T, filename string, file *os.File) error {
 			t.Logf("writing %d bytes", len(str))
 			_, err := file.WriteString(str)
 			if err != nil {
-				t.Fatalf("failed to write to the file: '%v'", err)
+				t.Errorf("failed to write to the file: '%v'", err)
 			}
 		}
 	}()
@@ -241,7 +242,7 @@ func TestFollowTruncation(t *testing.T) { withTempFile(t, time.Millisecond*150, 
 func canFollowTruncation(t *testing.T, filename string, file *os.File) error {
 	follow, err := tailf.Follow(filename, false)
 	if err != nil {
-		t.Fatalf("failed creating tailf.follower: %v", err)
+		return fmt.Errorf("failed creating tailf.follower: %v", err)
 	}
 
 	for i := int64(0); i < 10; i++ {
@@ -249,7 +250,7 @@ func canFollowTruncation(t *testing.T, filename string, file *os.File) error {
 			t.Logf("truncating the file")
 			file, err := os.OpenFile(filename, os.O_TRUNC, os.ModeTemporary)
 			if err != nil {
-				t.Fatalf("unable to truncate file: %v", err)
+				return fmt.Errorf("unable to truncate file: %v", err)
 			}
 			file.Close()
 		}
@@ -259,11 +260,12 @@ func canFollowTruncation(t *testing.T, filename string, file *os.File) error {
 		if err != nil {
 			t.Errorf("write failed, %v", err)
 		}
+		t.Logf("wrote: '%v'", wantBuf)
 
 		gotBuf := make([]byte, 1)
 		_, err := follow.Read(gotBuf)
 		if err != nil {
-			t.Fatalf("failed to read: %v", err)
+			return fmt.Errorf("failed to read: %v", err)
 		}
 
 		if !bytes.Equal(gotBuf, wantBuf) {
@@ -285,7 +287,7 @@ func TestFollowRandomTruncation(t *testing.T) {
 	withTempFile(t, time.Second, func(t *testing.T, filename string, file *os.File) error {
 		follow, err := tailf.Follow(filename, false)
 		if err != nil {
-			t.Fatalf("failed creating tailf.follower: %v", err)
+			return fmt.Errorf("failed creating tailf.follower: %v", err)
 		}
 
 		expected := "Bytes!"
@@ -307,7 +309,7 @@ func TestFollowRandomTruncation(t *testing.T) {
 				t.Log("truncating the file")
 				trunc, err := os.OpenFile(filename, os.O_TRUNC, os.ModeTemporary)
 				if err != nil {
-					t.Fatalf("unable to truncate file")
+					t.Errorf("unable to truncate file")
 				}
 				trunc.Close()
 			}
@@ -339,7 +341,7 @@ func TestSpinningReader(t *testing.T) {
 	withTempFile(t, time.Millisecond*150, func(t *testing.T, filename string, file *os.File) error {
 		follow, err := tailf.Follow(filename, false)
 		if err != nil {
-			t.Fatalf("failed creating tailf.follower: %v", err)
+			return fmt.Errorf("failed creating tailf.follower: %v", err)
 		}
 
 		stop := make(chan struct{})
@@ -361,6 +363,7 @@ func TestSpinningReader(t *testing.T) {
 
 		count := 0
 
+		// TODO: fix this
 		func() {
 			for {
 				select {
@@ -393,12 +396,12 @@ func TestPollingReader(t *testing.T) {
 
 	withTempFile(t, time.Second*2, func(t *testing.T, filename string, file *os.File) error {
 		if err := os.Chmod(path.Dir(filename), 0355); err != nil {
-			t.Fatalf("unable to modify tempdir's permissions to disallow listing its contents")
+			return fmt.Errorf("unable to modify tempdir's permissions to disallow listing its contents")
 		}
 
 		follow, err := tailf.Follow(filename, false)
 		if err != nil {
-			t.Fatalf("failed creating tailf.follower: %v", err)
+			return fmt.Errorf("failed creating tailf.follower: %v", err)
 		}
 
 		scanner := bufio.NewScanner(follow)
@@ -428,12 +431,12 @@ func TestPollingReader(t *testing.T) {
 		// Rotate the file
 		t.Logf("removing: %v:'%v'", file, file.Name())
 		if err := os.Remove(filename); err != nil {
-			t.Fatal("unable to remove the temp file")
+			return fmt.Errorf("unable to remove the temp file")
 		}
 
 		file, err = os.Create(filename)
 		if err != nil {
-			t.Fatal("unable to recreate the temp file")
+			return fmt.Errorf("unable to recreate the temp file")
 		}
 		t.Logf("created: %v:'%v'", file, file.Name())
 
@@ -468,6 +471,7 @@ func withTempFile(t *testing.T, timeout time.Duration, action func(t *testing.T,
 
 	file, err := ioutil.TempFile(dir, "tailf_test")
 	if err != nil {
+		os.RemoveAll(dir)
 		t.Fatalf("couldn't create temp file: '%v'", err)
 	}
 	defer os.RemoveAll(dir)
