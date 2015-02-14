@@ -237,7 +237,7 @@ func (f *follower) handleFileEvent(ev fsnotify.Event) error {
 		return nil
 
 	default:
-		panic(fmt.Sprintf("unknown event: %#v", ev))
+		return fmt.Errorf("recieved unknown fsnotify event: %#v", ev)
 	}
 }
 
