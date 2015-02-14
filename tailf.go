@@ -271,7 +271,7 @@ func (f *follower) reopenFile() error {
 	if err != nil {
 		return err
 	} else if n != unreadByteCount {
-		return fmt.Errorf("Failed to flush the buffer completely: Actual(%d) | Expected(%d) | buf_len(%d)", n, unreadByteCount, buf.Len())
+		return fmt.Errorf("failed to flush the buffer completely: Actual(%d) | Expected(%d) | buf_len(%d)", n, unreadByteCount, buf.Len())
 	}
 
 	f.fileReader.Reset(f.file)
@@ -308,7 +308,7 @@ func (f *follower) checkForTruncate() error {
 
 	f.mu.Unlock()
 	if os.IsNotExist(err) {
-		return ErrFileRemoved{fmt.Errorf("File was removed: %v", f.filename)}
+		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
 	}
 	if err != nil {
 		return err
@@ -316,9 +316,7 @@ func (f *follower) checkForTruncate() error {
 
 	newSize := fi.Size()
 	if newSize < f.size {
-		err = ErrFileTruncated{fmt.Errorf("File (%s) was truncated", f.filename)}
-	} else {
-		err = nil
+		err = ErrFileTruncated{fmt.Errorf("file (%s) was truncated", f.filename)}
 	}
 
 	f.size = newSize
@@ -327,7 +325,7 @@ func (f *follower) checkForTruncate() error {
 
 // This is here for situations where the directory the watched file sits in can't be inotified on
 func (f *follower) pollForChanges() {
-	previous_file, err := f.file.Stat()
+	previousFile, err := f.file.Stat()
 	if err != nil {
 		f.errc <- err
 	}
@@ -336,15 +334,17 @@ func (f *follower) pollForChanges() {
 		f.errc <- err
 	}
 
-	for current_file, err := os.Stat(f.filename); ; current_file, err = os.Stat(f.filename) {
+	for {
+		currentFile, err := os.Stat(f.filename)
+
 		switch err {
 		case nil:
-			switch os.SameFile(current_file, previous_file) {
+			switch os.SameFile(currentFile, previousFile) {
 			case true:
 				// No change, do nothing
 				break
 			case false:
-				previous_file = current_file
+				previousFile = currentFile
 				if err := f.reopenFile(); err != nil {
 					f.errc <- err
 				}
