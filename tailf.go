@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"gopkg.in/fsnotify.v1"
 )
@@ -38,14 +39,15 @@ type (
 type follower struct {
 	filename string
 
-	mu         sync.Mutex
-	notifyc    chan struct{}
-	errc       chan error
-	file       *os.File
-	fileReader *bufio.Reader
-	reader     io.Reader
-	watch      *fsnotify.Watcher
-	size       int64
+	mu             sync.Mutex
+	notifyc        chan struct{}
+	errc           chan error
+	file           *os.File
+	fileReader     *bufio.Reader
+	rotationBuffer *bytes.Buffer
+	reader         io.Reader
+	watch          *fsnotify.Watcher
+	size           int64
 }
 
 // Follow returns an io.ReadCloser that follows the writes to a file.
@@ -70,19 +72,26 @@ func Follow(filename string, fromStart bool) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	if err := watch.Add(file.Name()); err != nil {
+	absolute_path, err := filepath.Abs(filename)
+	if err != nil {
 		return nil, err
 	}
 
 	f := &follower{
-		filename:   filename,
-		notifyc:    make(chan struct{}),
-		errc:       make(chan error),
-		file:       file,
-		fileReader: reader,
-		reader:     reader,
-		watch:      watch,
-		size:       0,
+		filename:       absolute_path,
+		notifyc:        make(chan struct{}),
+		errc:           make(chan error),
+		file:           file,
+		fileReader:     reader,
+		rotationBuffer: bytes.NewBuffer(nil),
+		reader:         reader,
+		watch:          watch,
+		size:           0,
+	}
+
+	if err := watch.Add(filepath.Dir(absolute_path)); err != nil {
+		// If we can't watch the directory, we need to poll the file to see if it changes
+		go f.pollForChanges()
 	}
 
 	go f.followFile()
@@ -174,7 +183,7 @@ func (f *follower) followFile() {
 			if !open {
 				return
 			}
-			if ev.Name == f.filename {
+			if pathEqual(ev.Name, f.filename) {
 				err := f.handleFileEvent(ev)
 				if err != nil {
 					f.errc <- err
@@ -201,36 +210,35 @@ func (f *follower) followFile() {
 }
 
 func (f *follower) handleFileEvent(ev fsnotify.Event) error {
-	var err error
-	if err == nil && isOp(ev, fsnotify.Create) {
+	switch {
+	case isOp(ev, fsnotify.Create):
 		// new file created with the same name
-		err = f.reopenFile()
-	}
+		return f.reopenFile()
 
-	if err == nil && (isOp(ev, fsnotify.Remove) || isOp(ev, fsnotify.Rename) || isOp(ev, fsnotify.Chmod)) {
+	case isOp(ev, fsnotify.Write):
+		// On write, check to see if the file has been truncated
+		// If not, insure the bufio buffer is full
+		switch f.checkForTruncate() {
+		case nil:
+			return f.fillFileBuffer()
+		case ErrFileRemoved{}:
+			// If file was written to and then removed before we could even Stat the file, just wait for the next creation
+			return nil
+		default:
+			return f.reopenFile()
+		}
+
+	case isOp(ev, fsnotify.Remove), isOp(ev, fsnotify.Rename):
 		// wait for a new file to be created
-		_ = f.watch.Remove(f.filename)
-		err = f.watch.Add(f.filename)
-		if err != nil {
-			return err
-		}
+		return nil
 
-		if _, serr := os.Stat(f.filename); serr == nil {
-			err = f.reopenFile()
-		}
+	case isOp(ev, fsnotify.Chmod):
+		// Modified time on the file changed, noop
+		return nil
+
+	default:
+		return fmt.Errorf("recieved unknown fsnotify event: %#v", ev)
 	}
-
-	if err == nil && isOp(ev, fsnotify.Write) {
-		// the general case where we wake up those waiting
-		// for more data
-		err = f.updateFile()
-	}
-
-	if err != nil {
-		log.Printf("handleEvent error: %v", err)
-	}
-
-	return err
 }
 
 func (f *follower) reopenFile() error {
@@ -239,7 +247,8 @@ func (f *follower) reopenFile() error {
 
 	_, err := os.Stat(f.filename)
 	if os.IsNotExist(err) {
-		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
+		// File disappeared too quickly, wait for next rotation
+		return nil
 	}
 	if err != nil {
 		return err
@@ -255,25 +264,26 @@ func (f *follower) reopenFile() error {
 	}
 
 	// recover buffered bytes
-	unreadByteCount := f.fileReader.Buffered()
+	unreadByteCount := f.rotationBuffer.Len() + f.fileReader.Buffered()
 	buf := bytes.NewBuffer(make([]byte, unreadByteCount))
 
-	n, err := f.fileReader.Read(buf.Bytes())
+	n, err := f.reader.Read(buf.Bytes())
 	if err != nil {
 		return err
 	} else if n != unreadByteCount {
-		return fmt.Errorf("Failed to flush the buffer completely: Actual(%d) | Expected(%d) | buf_len(%d)", n, unreadByteCount, buf.Len())
+		return fmt.Errorf("failed to flush the buffer completely: Actual(%d) | Expected(%d) | buf_len(%d)", n, unreadByteCount, buf.Len())
 	}
 
 	f.fileReader.Reset(f.file)
+	f.rotationBuffer = buf
 
 	// append buffered bytes before the new file
-	f.reader = io.MultiReader(buf, f.fileReader)
+	f.reader = io.MultiReader(f.rotationBuffer, f.fileReader)
 
 	return err
 }
 
-func (f *follower) updateFile() error {
+func (f *follower) fillFileBuffer() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -288,8 +298,91 @@ func (f *follower) updateFile() error {
 	}
 }
 
+// Note: if the file gets truncated, and before the size can be stat'd,
+// it has regrown to be >= the same size as previously, the truncate
+// will be missed. tl;dr, don't use copy-truncate...
+func (f *follower) checkForTruncate() error {
+	f.mu.Lock()
+
+	fi, err := os.Stat(f.filename)
+
+	f.mu.Unlock()
+	if os.IsNotExist(err) {
+		return ErrFileRemoved{fmt.Errorf("file was removed: %v", f.filename)}
+	}
+	if err != nil {
+		return err
+	}
+
+	newSize := fi.Size()
+	if newSize < f.size {
+		err = ErrFileTruncated{fmt.Errorf("file (%s) was truncated", f.filename)}
+	}
+
+	f.size = newSize
+	return err
+}
+
+// This is here for situations where the directory the watched file sits in can't be inotified on
+func (f *follower) pollForChanges() {
+	previousFile, err := f.file.Stat()
+	if err != nil {
+		f.errc <- err
+	}
+
+	if err := f.watch.Add(f.filename); err != nil {
+		f.errc <- err
+	}
+
+	for {
+		currentFile, err := os.Stat(f.filename)
+
+		switch err {
+		case nil:
+			switch os.SameFile(currentFile, previousFile) {
+			case true:
+				// No change, do nothing
+				break
+			case false:
+				previousFile = currentFile
+				if err := f.reopenFile(); err != nil {
+					f.errc <- err
+				}
+
+				if err := f.watch.Add(f.filename); err != nil {
+					f.errc <- err
+				}
+
+				select {
+				case f.notifyc <- struct{}{}:
+					// try to wake up whoever was waiting on an update
+				default:
+					// otherwise just wait for the next event
+				}
+			}
+		default:
+			// Filename doens't seem to be there, wait for it to re-appear
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
 func isOp(ev fsnotify.Event, op fsnotify.Op) bool {
 	return ev.Op&op == op
+}
+
+func pathEqual(lhs, rhs string) bool {
+	var err error
+	lhs, err = filepath.Abs(lhs)
+	if err != nil {
+		return false
+	}
+	rhs, err = filepath.Abs(rhs)
+	if err != nil {
+		return false
+	}
+	return lhs == rhs
 }
 
 func imin(a, b int) int {
