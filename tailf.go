@@ -136,6 +136,7 @@ func (f *follower) Read(b []byte) (int, error) {
 			// bad file number will likely be replaced by
 			// a new file on an inotify event, so carry on
 		} else {
+			f.mu.Unlock()
 			return 0, err
 		}
 	}
